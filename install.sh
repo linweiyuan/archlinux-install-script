@@ -1,327 +1,397 @@
 #!/bin/bash
 
-prepare() {
-    # 分区
-    DISK=/dev/nvme0n1
-    ESP=/dev/nvme0n1p1
-    ROOT=/dev/nvme0n1p2
-    parted $DISK mklabel gpt
-    parted $DISK mkpart primary 1 512M
-    parted $DISK mkpart primary '512M -1' # -1转义
-    parted $DISK set 1 boot on
+archlinux_repo='http://192.168.31.60:7878/archlinux/$repo/os/$arch'
+archlinuxcn_repo='http://192.168.31.60:7878/archlinuxcn/$arch'
 
-    # 格式化
-    mkfs.fat -F32 $ESP
-    mkfs.ext4 $ROOT
+types=(
+  bios
+  uefi
+)
 
-    # 挂载
-    mount $ROOT /mnt
-    mkdir -p /mnt/boot/efi
-    mount $ESP /mnt/boot/efi
+environments=(
+  i3
+  kde
+  deepin
+)
 
-    # archlinux源
-    echo 'Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/x86_64' > /etc/pacman.d/mirrorlist
+init() {
+    echo "init"
+        systemctl stop reflector
 
-    # 安装
-    pacstrap /mnt base base-devel bash-completion grub efibootmgr
-    genfstab -U -p /mnt > /mnt/etc/fstab
+        read -p "Please input root password: " root_password
+        read -p "Please input normal username: " username
+        read -p "Please input normal user password: " password
 
-    # 配置grub
-    arch-chroot /mnt grub-install --efi-directory=/boot/efi --bootloader-id=Arch
-    arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
-    arch-chroot /mnt sed '/set timeout=5/{s/5/0/}' -i /boot/grub/grub.cfg
+        echo "Please select type: "
+        select type in ${types[@]}
+        do
+            case $type in
+            "bios")
+                echo "bios"
+                bios
+                break
+                ;;
+            "uefi")
+                echo "uefi"
+                uefi
+                break
+                ;;
+            esac
+        done
 
-    # 后面还会用到
-    cp install.sh /mnt/root
+        config_pacman
+        echo "Please select desktop environment: "
+        select environment in ${environments[@]}
+        do
+            case $environment in
+            "i3")
+                echo "i3"
+                i3
+                break
+                ;;
+            "kde")
+                echo "kde"
+                kde
+                break
+                ;;
+            "deepin")
+                echo "deepin"
+                deepin
+                break
+                ;;
+            esac
+        done
 
-    # 重启
-    umount /mnt/boot/efi
-    umount /mnt
+        if [ $type = "uefi" ] ;then
+            pacstrap /mnt efibootmgr
+        fi
+
+    echo 'genfstab start'
+        genfstab -U /mnt > /mnt/etc/fstab
+    echo 'genfstab end'
+
+    echo 'chroot start'
+        arch-chroot /mnt sh -c "
+            set -e
+            echo 'grub install start'
+                sed -i 's/GRUB_TIMEOUT=5/GRUB_TIMEOUT=0/g' /etc/default/grub
+                if [ $type == \"bios\" ]; then
+                    grub-install $disk
+                elif [ $type == \"uefi\" ]; then
+                    grub-install --efi-directory=/boot/efi --bootloader-id=\"Arch Linux\"
+                fi
+                grub-mkconfig -o /boot/grub/grub.cfg
+            echo 'grub install end'
+
+            echo 'update root password start'
+                chsh -s /bin/zsh
+                cp /usr/share/oh-my-zsh/zshrc ~/.zshrc
+                echo root:$root_password | chpasswd
+            echo 'update root password end'
+
+                systemctl enable dhcpcd
+            echo 'dhcpcd enabled'
+
+            echo 'nano config update start'
+                sed -i '/# include/{s/#//}' /etc/nanorc
+                sed -i '/# set constantshow/{s/#//}' /etc/nanorc
+                echo 'alias n=nano' >> /etc/profile
+                echo 'export EDITOR=nano' >> /etc/profile
+            echo 'nano config update end'
+
+            echo 'update locale start'
+                sed -i '/#en_US.UTF-8/{s/#//}' /etc/locale.gen
+                locale-gen
+            echo 'update locale end'
+
+            echo 'add normal user start'
+                useradd -m $username -s /bin/zsh
+                echo $username:$password | chpasswd
+                echo -e '\n$username ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+            echo 'add normal user end'
+
+            echo 'config docker start'
+                gpasswd -a $username docker
+                systemctl enable docker
+            echo 'config docker end'
+
+            echo 'config virtualbox start'
+                gpasswd -a $username vboxusers
+            echo 'config virtualbox end'
+
+            echo 'config network start'
+                systemctl enable NetworkManager
+            echo 'config network end'
+
+            echo 'config environment start'
+                if [ $environment == \"i3\" ]; then
+                    sed -i 's/#greeter-session=example-gtk-gnome/greeter-session=lightdm-slick-greeter/g' /etc/lightdm/lightdm.conf
+                    systemctl enable lightdm
+                elif [ $environment == \"kde\" ]; then
+                    systemctl enable sddm
+                elif [ $environment == \"deepin\" ]; then
+                    systemctl enable lightdm
+                fi
+            echo 'config environment end'
+
+            echo 'update db start'
+                updatedb
+            echo 'update db end'
+
+            su $username -c '
+                cp /usr/share/oh-my-zsh/zshrc ~/.zshrc
+                mkdir ~/.ssh
+                echo -e \"ServerAliveInterval 60\n\nHost *\n StrictHostKeyChecking no\n\nHost vt\n HostName hostname\n Port port\n User user\" > ~/.ssh/config
+            '
+        "
+    echo 'chroot end'
+
+    echo 'umount start'
+        umount -R /mnt
+    echo 'umount end'
+
+    echo 'system will reboot in 5 seconds'
+        sleep 5
+
+    sync
     reboot -f
 }
 
-pgk=(
-    adobe-source-han-sans-cn-fonts
-    adobe-source-han-sans-jp-fonts
-    adobe-source-han-sans-kr-fonts
-    anaconda
-    android-apktool
-    android-emulator
-    android-file-transfer
-    android-ndk
-    android-platform
-    android-sdk-build-tools
-    android-studio
-    android-support
-    android-support-repository
-    android-tools
-    apache-tools
-    arandr
+bios() {
+    echo 'partition start'
+        disk=/dev/sda
+        partition=/dev/sda1
+        sfdisk --delete $disk
+
+        set -e
+
+        if grep -qs "$partition" /proc/mounts; then
+            umount $partition
+        fi
+
+        parted -s $disk mklabel msdos
+        parted -s $disk mkpart primary ext4 '1 -1'
+        mkfs.ext4 -F $partition
+        parted -s $disk set 1 boot on
+    echo 'partition end'
+
+    echo 'partition monut start'
+        mount $partition /mnt
+    echo 'partition monut end'
+}
+
+uefi() {
+    echo 'partition start'
+        disk=/dev/sda
+        efi=/dev/sda1
+        partition=/dev/sda2
+        sfdisk --delete $disk
+
+        set -e
+
+        if grep -qs "$partition" /proc/mounts; then
+            umount $partition
+        fi
+
+        parted -s $disk mklabel gpt
+        parted -s $disk mkpart primary fat32 1 512M
+        parted -s $disk mkpart primary ext4 '512M -1'
+        parted -s $disk set 1 boot on
+        mkfs.fat -F32 $efi
+        mkfs.ext4 -F $partition
+    echo 'partition end'
+
+    echo 'partition monut start'
+        mount $partition /mnt
+        mkdir -p /mnt/boot/efi
+        mount $efi /mnt/boot/efi
+    echo 'partition monut end'
+}
+
+config_pacman() {
+    echo 'pacman config start'
+        echo "Server = $archlinux_repo" > /etc/pacman.d/mirrorlist
+        sed -i 's/Required DatabaseOptional/Never/g' /etc/pacman.conf
+        sed -i '/ParallelDownloads/a ILoveCandy' /etc/pacman.conf
+        echo -e "\n[archlinuxcn]" >> /etc/pacman.conf
+        echo "Server = $archlinuxcn_repo" >> /etc/pacman.conf
+    echo 'pacman config end'
+}
+
+i3() {
+    echo 'install i3 packages start'
+        pacstrap /mnt ${init_packages[@]}
+        cp /etc/pacman.conf /mnt/etc/pacman.conf
+        pacstrap /mnt ${i3_packages[@]}
+        pacstrap /mnt ${common_packages[@]}
+    echo 'install i3 packages end'
+}
+
+kde() {
+    echo 'install kde packages start'
+        pacstrap /mnt ${init_packages[@]}
+        cp /etc/pacman.conf /mnt/etc/pacman.conf
+        pacstrap /mnt ${kde_packages[@]}
+        pacstrap /mnt ${common_packages[@]}
+    echo 'install kde packages end'
+}
+
+deepin() {
+    echo 'install deepin packages start'
+        pacstrap /mnt ${init_packages[@]}
+        cp /etc/pacman.conf /mnt/etc/pacman.conf
+        pacstrap /mnt ${deepin_packages[@]}
+        pacstrap /mnt ${common_packages[@]}
+    echo 'install deepin packages end'
+}
+
+init_packages=(
+    base
+    base-devel
+    bash-completion
+    dhcpcd
+    grub
+    linux
+    linux-firmware
+    nano
+)
+
+i3_packages=(
+    alsa-utils
+    arc-gtk-theme
+    arc-icon-theme
+    conky
+    i3-gaps
+    lightdm
+    lightdm-slick-greeter
+    lxappearance
+    mousepad
+    network-manager-applet
+    pavucontrol
+    picom
+    py3status
+    python-pytz
+    python-tzlocal
+    qt5ct
+    ristretto
+    rofi
+    thunar
+    thunar-archive-plugin
+    xarchiver
+    xfce4-clipman-plugin
+    xfce4-power-manager
+    xfce4-terminal
+    xorg-xkill
+)
+
+kde_packages=(
     ark
-    chromium
-    deepin-screenshot
-    deepin-screen-recorder
-    # dkms
-    docker
-    docker-compose
-    docker-machine
     dolphin
-    fcitx-im
-    fcitx-sogoupinyin
     filelight
-    filezilla
-    gimp
-    git
-    gitkraken
-    gnome-keyring
     gwenview
-    gradle
-    hydra
-    intellij-idea-ultimate-edition
-    intellij-idea-ultimate-edition-jre
-    jdk8
-    john
-    jq
     kate
-    kcm-fcitx
-    kdialog
     kinfocenter
     konsole
-    libsodium
-    # linux-headers
-    lrzsz
-    maven
-    metasploit
-    mlocate
-    mycli
-    netease-cloud-music
-    net-tools
-    nmap
-    nodejs
-    noto-fonts
-    noto-fonts-cjk
-    noto-fonts-emoji
-    npm
-    ntfs-3g
-    okteta
     okular
-    openntpd
-    openssh
-    pepper-flash
     phonon-qt5-vlc
     plasma-desktop
     plasma-nm
     plasma-pa
-    postman-bin
-    powerdevil
-    powerpill
-    # ppsspp
-    privoxy
-    proxychains-ng
-    python-pip
-    redis-desktop-manager
-    rsync
     sddm
-    shadowsocks
-    speedtest-cli
-    sqlmap
-    sublime-text-dev
-    teamviewer
-    typora
-    unrar
-    unzip
-    user-manager
+    yakuake
+)
+
+deepin_packages=(
+    deepin
+    deepin-screenshot
+    deepin-terminal
+)
+
+common_packages=(
+    android-tools
+    fcitx5-im
+    fcitx5-chinese-addons
+    flameshot
+    docker
+    docker-compose
+    github-cli
+    godot
+    gradle
+    gvfs
+    gvfs-mtp
+    htop
+    inetutils
+    intellij-idea-ultimate-edition
+    intellij-idea-ultimate-edition-jre
+    iredis
+    jdk-openjdk
+    jdk8-openjdk
+    jq
+    lazygit
+    links
+    lrzsz
+    man-pages
+    maven
+    mlocate
+    mycli
+    neofetch
+    net-tools
+    nodejs
+    noto-fonts
+    noto-fonts-cjk
+    npm
+    ntfs-3g
+    oh-my-zsh-git
+    openjdk-src
+    openjdk8-src
+    openssh
+    p7zip
+    pikaur
+    pm2
+    postman-bin
+    ps_mem
+    pulseaudio
+    ranger
+    rsync
+    scrcpy
+    sqlitebrowser
+    tree
     virtualbox-ext-oracle
     virtualbox-guest-iso
     virtualbox-host-modules-arch
-    vokoscreen-git
-    w3m
-    wewechat
     wget
-    wireshark-qt
-    wps-office
     xorg-server
-    xorg-xkill
-    yakuake
-    youtube-dl
-    zip
+    yarn
     zsh
+    zssh
 )
 
-aur=(
-    # 9182eu-dkms
-    android-constraint-layout
-    android-google-repository
-    android-sources-28
-    android-x86-64-system-image-28
-    archlinux-themes-sddm
-    burpsuite
-    deepin-wechat
-    deepin-wine-thunderspeed
-    dex2jar
-    dingtalk-electron
-    dirbuster
-    # jd-gui # build太久
-    maltego
-    python-genpac
-    sqliteman
-    ttf-wps-fonts
-    # xboxdrv
+aur_packages=(
+    fcitx5-breeze
+    google-chrome
+    resp-app
+    visual-studio-code-bin
+    vue-cli
 )
-
-aur() {
-    # AUR包代理下载
-    proxychains yaourt -S --noconfirm --needed ${aur[@]}
-}
 
 setup() {
-    # 基本数据
-    HOSTNAME='?'
-    USERNAME='?'
-    PASSWORD='?'
-    SS_CONFIG_NAME='?'
-    SS_SERVER='?'
-    SS_PORT='?'
-    SS_PASSWORD='?'
-    SS_METHOD='?'
+    read -p "Please input hostname: " hostname
+    echo 'update hostname start'
+        hostnamectl set-hostname $hostname
+    echo 'update hostname end'
 
-    # archlinuxcn源
-    sed '/#Color\|#TotalDownload\|#\[multilib\]/{s/#//}' -i /etc/pacman.conf
-    sed 's/Required DatabaseOptional/Never/g' -i /etc/pacman.conf
-    sed '94s/#//' -i /etc/pacman.conf # [multilib]
-    echo -e '\n[archlinuxcn]\nServer = https://mirrors.tuna.tsinghua.edu.cn/archlinuxcn/x86_64' >> /etc/pacman.conf
-    pacman -Syy --noconfirm archlinuxcn-keyring yaourt
+    echo 'update timedate start'
+        timedatectl set-timezone Asia/Shanghai
+        timedatectl set-ntp true
+    echo 'update timedate end'
 
-    # 用户
-    useradd -m $USERNAME
+    echo 'update locale start'
+        localectl set-locale en_US.UTF-8
+    echo 'update locale end'
 
-    # sudo免密码
-    echo -e "\n$USERNAME ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-    echo $USERNAME:$PASSWORD | chpasswd
-
-    # 安装需要的包
-    pacman -S --noconfirm --needed ${pgk[@]}
-
-    # shadowsocks
-    mv /etc/shadowsocks/example.json /etc/shadowsocks/$SS_CONFIG_NAME.json
-    sed "s/my_server_ip/$SS_SERVER/g" -i /etc/shadowsocks/$SS_CONFIG_NAME.json
-    sed "s/8388/$SS_PORT/g" -i /etc/shadowsocks/$SS_CONFIG_NAME.json
-    sed "s/mypassword/$SS_PASSWORD/g" -i /etc/shadowsocks/$SS_CONFIG_NAME.json
-    sed "s/aes-256-cfb/$SS_METHOD/g" -i /etc/shadowsocks/$SS_CONFIG_NAME.json
-    systemctl enable shadowsocks@$SS_CONFIG_NAME.service
-    systemctl start shadowsocks@$SS_CONFIG_NAME.service
-
-    # proxychains-ng
-    sed '/#quiet_mode/{s/#//}' -i /etc/proxychains.conf # 减少输出
-    sed "s/socks4 	127.0.0.1 9050/\nsocks5 127.0.0.1 1080/g" -i /etc/proxychains.conf
-
-    # privoxy
-    sed 's/127.0.0.1:8118/0.0.0.0:8118/g' -i /etc/privoxy/config
-    echo -e '\nforward-socks5 / 127.0.0.1:1080 .' >> /etc/privoxy/config
-    systemctl enable privoxy.service
-    systemctl start privoxy.service
-
-    sleep 1s # 配置生效延迟
-
-    # AUR不能用root
-    cp install.sh /home/$USERNAME/
-    chown $USERNAME:$USERNAME /home/$USERNAME/install.sh
-    cd /home/$USERNAME # 权限问题
-    su $USERNAME -c "/home/$USERNAME/install.sh aur"
-
-    ##################################################
-
-    # 详细配置
-    # 主机
-    hostnamectl set-hostname $HOSTNAME
-
-    # 时区
-    timedatectl set-timezone Asia/Shanghai
-
-    # 国际化
-    sed '/#en_US.UTF-8\|#zh_CN.UTF-8/{s/#//}' -i /etc/locale.gen
-    locale-gen
-    echo 'LANG=en_US.UTF-8' > /etc/locale.conf
-
-    # 基本文件夹
-    su $USERNAME -c 'cd ~ && mkdir Data Documents Downloads Music Pictures Project Software Temp Videos .gradle'
-
-    # anaconda
-    echo 'export PATH=/opt/anaconda/bin:$PATH' >> /etc/profile
-
-    # android
-    echo 'export ANDROID_HOME=/opt/android-sdk' >> /etc/profile
-    ln -s /opt/android-ndk /opt/android-sdk/ndk-bundle
-    chown -R $USERNAME:$USERNAME /opt/android-sdk # Android Studio需要写文件到这些目录，AUR里找不到包
-    # chown -R $USERNAME:$USERNAME /opt/android-ndk
-
-    # deepin-screen-recorder
-    su $USERNAME -c "mkdir -p ~/.config/deepin/deepin-screen-recorder"
-    su $USERNAME -c "echo -e \"[fileformat]\nsave_directory=/home/$USERNAME/Videos\" > ~/.config/deepin/deepin-screen-recorder/config.conf"
-
-    # docker
-    gpasswd -a $USERNAME docker
-    mkdir /etc/systemd/system/docker.service.d
-    echo -e '[Service]\nEnvironment="HTTP_PROXY=127.0.0.1:8118"\nEnvironment="HTTPS_PROXY=127.0.0.1:8118"' > /etc/systemd/system/docker.service.d/proxy.conf # 即使官方中国仓库或阿里云也不好使
-    systemctl enable docker.service
-
-    # fcitx
-    su $USERNAME -c "echo -e 'export GTK_IM_MODULE=fcitx\nexport QT_IM_MODULE=fcitx\nexport XMODIFIERS=@im=fcitx' > ~/.xprofile"
-
-    # gradle
-    echo -e "systemProp.http.proxyHost=127.0.0.1\nsystemProp.http.proxyPort=8118\nsystemProp.https.proxyHost=127.0.0.1\nsystemProp.https.proxyPort=8118" > ~/.gradle/gradle.properties
-
-    # jdk
-    echo 'export JAVA_HOME=/usr/lib/jvm/java-8-jdk' >> /etc/profile
-
-    # mlocate
-    updatedb
-
-    # nano
-    sed '48s/# //' -i /etc/nanorc # 行号
-    sed '262s/# //' -i /etc/nanorc # 代码高亮
-
-    # nodejs
-    proxychains npm i -g cnpm --registry=https://registry.npm.taobao.org
-    proxychains npm i -g hexo-cli
-
-    # openntpd
-    systemctl enable openntpd.service
-    systemctl start openntpd.service
-
-    # openssh
-    mkdir ~/.ssh
-    echo "ServerAliveInterval 60" > ~/.ssh/config
-
-    # plasma-nm
-    systemctl enable NetworkManager.service
-
-    # privoxy
-    sed 's/127.0.0.1:8118/0.0.0.0:8118/g' -i /etc/privoxy/config
-    echo -e '\nforward-socks5 / 127.0.0.1:1080 .' >> /etc/privoxy/config
-    systemctl enable privoxy.service
-    systemctl start privoxy.service
-
-    # python-genpac
-    su $USERNAME -c "genpac --format=pac --pac-proxy=\"SOCKS5 127.0.0.1:1080\" > ~/.pac"
-
-    # sddm
-    sddm --example-config > /etc/sddm.conf
-    sed '/Current=/{s/=/=archlinux-simplyblack/}' -i /etc/sddm.conf # 主题
-    systemctl enable sddm.service
-
-    # teamviewer
-    systemctl enable teamviewerd.service
-
-    # virtualbox
-    gpasswd -a $USERNAME vboxusers
-
-    # wireshark
-    gpasswd -a $USERNAME wireshark
-
-    # zsh
-    echo $PASSWORD | sudo -S su $USERNAME -c "$(curl -fsSL https://raw.github.com/robbyrussell/oh-my-zsh/master/tools/install.sh)"
-    reboot -f
+    echo 'install aur packages start'
+        pikaur -S --needed --noconfirm ${aur_packages[@]}
+    echo 'install aur packages end'
 }
 
-$1
+init
