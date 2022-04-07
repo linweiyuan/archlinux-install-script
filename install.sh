@@ -394,4 +394,4 @@ setup() {
     echo 'install aur packages end'
 }
 
-init
+$1
