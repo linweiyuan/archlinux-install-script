@@ -1,13 +1,3 @@
-进入livecd时执行
+可自定义安装哪些包
 
-```bash
-./install.sh init
-```
-
-重启后执行
-
-```bash
-./install setup
-```
-
-TBD
+[![archlinux-install-script](https://asciinema.org/a/2LKe6QEPRUtCuPzYYKHmY8NL8.svg)](https://asciinema.org/a/2LKe6QEPRUtCuPzYYKHmY8NL8?autoplay=1)
