@@ -1,7 +1,7 @@
 #!/bin/bash
 
-archlinux_repo='http://192.168.31.60:7878/archlinux/$repo/os/$arch'
-archlinuxcn_repo='http://192.168.31.60:7878/archlinuxcn/$arch'
+archlinux_repo='https://mirrors.bfsu.edu.cn/archlinux/$repo/os/$arch'
+archlinuxcn_repo='https://mirrors.bfsu.edu.cn/archlinuxcn/$arch'
 
 types=(
   bios
@@ -309,6 +309,7 @@ deepin_packages=(
 
 common_packages=(
     android-tools
+    ctop
     fcitx5-im
     fcitx5-chinese-addons
     flameshot
@@ -320,6 +321,7 @@ common_packages=(
     gvfs
     gvfs-mtp
     htop
+    httpie
     inetutils
     intellij-idea-ultimate-edition
     intellij-idea-ultimate-edition-jre
