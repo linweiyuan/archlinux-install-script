@@ -357,6 +357,7 @@ common_packages=(
     rsync
     scrcpy
     sqlitebrowser
+    sshfs
     tree
     virtualbox-ext-oracle
     virtualbox-guest-iso
