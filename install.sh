@@ -261,6 +261,7 @@ i3_packages=(
     arc-gtk-theme
     arc-icon-theme
     conky
+    dunst
     i3-gaps
     lightdm
     lightdm-slick-greeter
